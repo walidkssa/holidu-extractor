@@ -165,7 +165,7 @@ def _calendar_days(details: Dict[str, Any]) -> Dict[str, dict]:
     return {x["calendarDate"]: x for x in days if x.get("calendarDate")}
 
 
-def nearest_available_price(details, room_id, want_ci, nights, api_key, cookies, impression_id, max_try=5):
+def nearest_available_price(details, room_id, want_ci, nights, api_key, cookies, impression_id, max_try=12):
     """Quand les dates demandees sont indisponibles: trouve la fenetre RESERVABLE de
     `nights` nuits la plus proche (meme saison de preference) et renvoie son prix.
     Airbnb expose le prix sur dates dispo -> on donne une estimation representative
