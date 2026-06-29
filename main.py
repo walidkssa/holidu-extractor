@@ -186,6 +186,32 @@ def extract_airbnb(url: str) -> dict:
         if mb:
             out["bedrooms"] = f"{mb.group(1)} chambres"
 
+        # Type de logement
+        rt = details.get("room_type") or details.get("home_tier")
+        if rt:
+            out["roomType"] = str(rt)
+
+        # Equipements: ramasse les titres d'amenities (structure variable -> defensif)
+        amenities: List[str] = []
+        seen_am = set()
+        def _collect_amenities(node: Any) -> None:
+            if len(amenities) >= 12:
+                return
+            if isinstance(node, dict):
+                t = node.get("title") or node.get("name")
+                avail = node.get("available")
+                if isinstance(t, str) and 2 < len(t) < 40 and avail is not False and t.lower() not in seen_am:
+                    seen_am.add(t.lower())
+                    amenities.append(t)
+                for v in node.values():
+                    _collect_amenities(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _collect_amenities(v)
+        _collect_amenities(details.get("amenities"))
+        if amenities:
+            out["amenities"] = amenities[:12]
+
         # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
         # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
         price_raw: Any = None
