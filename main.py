@@ -270,11 +270,6 @@ def extract_airbnb(url: str) -> dict:
             total = price_from_main(price_raw)
             if total:
                 out["price"] = total
-            try:
-                m = price_raw.get("main") if isinstance(price_raw, dict) else None
-                out["_pdbg"] = _json_dumps_safe(m)[:600]
-            except Exception:
-                pass
 
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
