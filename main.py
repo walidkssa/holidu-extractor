@@ -144,6 +144,71 @@ def price_from_main(price_raw: Any) -> Optional[int]:
     return max(nums) if nums else None
 
 
+_MONTHS_FR = ["", "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+
+
+def _calendar_days(details: Dict[str, Any]) -> Dict[str, dict]:
+    """Aplatit le calendrier get_details en {date_iso: jour}."""
+    days: List[dict] = []
+
+    def _collect(o: Any) -> None:
+        if isinstance(o, dict):
+            if "calendarDate" in o:
+                days.append(o)
+            for v in o.values():
+                _collect(v)
+        elif isinstance(o, list):
+            for v in o:
+                _collect(v)
+
+    _collect(details.get("calendar"))
+    return {x["calendarDate"]: x for x in days if x.get("calendarDate")}
+
+
+def nearest_available_price(details, room_id, want_ci, nights, api_key, cookies, impression_id, max_try=5):
+    """Quand les dates demandees sont indisponibles: trouve la fenetre RESERVABLE de
+    `nights` nuits la plus proche (meme saison de preference) et renvoie son prix.
+    Airbnb expose le prix sur dates dispo -> on donne une estimation representative
+    au lieu de rien. Retourne {price, label} ou None."""
+    import pyairbnb  # type: ignore
+    from datetime import date as _date, timedelta as _td
+
+    bydate = _calendar_days(details)
+    if not bydate:
+        return None
+    cands = []
+    for ci_s, day in bydate.items():
+        if not day.get("availableForCheckin"):
+            continue
+        try:
+            c0 = _date.fromisoformat(ci_s)
+        except Exception:
+            continue
+        window = [(c0 + _td(days=k)).isoformat() for k in range(nights)]
+        if all(bydate.get(w, {}).get("available") for w in window):
+            cands.append((abs((c0 - want_ci).days), c0))
+    cands.sort()
+    for _, c0 in cands[:max_try]:
+        co = c0 + _td(days=nights)
+        try:
+            pr = pyairbnb.get_price(
+                room_id=room_id, check_in=c0, check_out=co, adults=2,
+                currency="EUR", language="fr", impresion_id=impression_id,
+                api_key=api_key, cookies=cookies,
+            )
+        except Exception:
+            continue
+        total = price_from_main(pr)
+        if total:
+            label = (
+                f"{c0.day}-{co.day} {_MONTHS_FR[c0.month]}"
+                if c0.month == co.month
+                else f"{c0.day} {_MONTHS_FR[c0.month]} - {co.day} {_MONTHS_FR[co.month]}"
+            )
+            return {"price": total, "label": label}
+    return None
+
+
 def extract_airbnb(url: str, with_price: bool = True) -> dict:
     """pyairbnb (solo-maintainer): verifier la signature reelle de la version installee.
     On extrait le room_id depuis /rooms/{id}, puis on mappe defensivement.
@@ -246,33 +311,36 @@ def extract_airbnb(url: str, with_price: bool = True) -> dict:
 
         # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
         # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
-        price_raw: Any = None
         if with_price and dates["checkIn"] and dates["checkOut"]:
             from datetime import date as _date
             ci = _date.fromisoformat(dates["checkIn"])
             co = _date.fromisoformat(dates["checkOut"])
+            nights = max((co - ci).days, 1)
             try:
                 api_key = pyairbnb.get_api_key("")
                 _meta, price_input, cookies = pyairbnb.get_metadata_from_url(url, "en", "")
                 impression_id = price_input.get("impression_id") if isinstance(price_input, dict) else None
-                price_raw = pyairbnb.get_price(
-                    room_id=room_id,
-                    check_in=ci,
-                    check_out=co,
-                    adults=2,
-                    currency="EUR",
-                    language="fr",
-                    impresion_id=impression_id,
-                    api_key=api_key,
-                    cookies=cookies,
-                )
+                # 1) Prix EXACT sur les dates demandees (si reservables)
+                try:
+                    price_raw = pyairbnb.get_price(
+                        room_id=room_id, check_in=ci, check_out=co, adults=2,
+                        currency="EUR", language="fr", impresion_id=impression_id,
+                        api_key=api_key, cookies=cookies,
+                    )
+                    total = price_from_main(price_raw)
+                    if total:
+                        out["price"] = total
+                except Exception as e1:
+                    out["_price_err"] = f"{type(e1).__name__}: {e1}"[:200]
+                # 2) Dates indisponibles -> estimation sur la fenetre reservable la plus proche
+                if not out.get("price"):
+                    est = nearest_available_price(details, room_id, ci, nights, api_key, cookies, impression_id)
+                    if est:
+                        out["price"] = est["price"]
+                        out["priceEstimated"] = True
+                        out["priceDates"] = est["label"]
             except Exception as e:
                 out["_price_err"] = f"{type(e).__name__}: {e}"[:200]
-            # Prix EXACT affiche par Airbnb (primaryLine), pas une heuristique:
-            # on ne met un prix que s'il est sans ambiguite, sinon rien (jamais de faux prix).
-            total = price_from_main(price_raw)
-            if total:
-                out["price"] = total
 
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
