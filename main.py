@@ -27,6 +27,7 @@ from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
 
 app = FastAPI(title="holidu-extractor")
 
@@ -364,11 +365,15 @@ async def extract(request: Request, x_secret: Optional[str] = Header(default=Non
     if hit:
         return JSONResponse(hit)
 
+    # Extraction bloquante (pyairbnb/Playwright) executee dans un THREADPOOL: la
+    # boucle d'evenements reste libre -> les requetes en cache repondent instantanement
+    # meme pendant une extraction fraiche, et plusieurs liens s'extraient en parallele
+    # sans se bloquer mutuellement (corrige la non-determination des photos).
     host = urlparse(url).netloc.lower()
     if "airbnb." in host:
-        result = extract_airbnb(url)
+        result = await run_in_threadpool(extract_airbnb, url)
     elif "booking." in host:
-        result = extract_booking(url)
+        result = await run_in_threadpool(extract_booking, url)
     else:
         result = empty_result("other", url)
 
@@ -398,9 +403,9 @@ async def photos(request: Request, x_secret: Optional[str] = Header(default=None
 
     host = urlparse(url).netloc.lower()
     if "airbnb." in host:
-        result = extract_airbnb(url, with_price=False)
+        result = await run_in_threadpool(extract_airbnb, url, False)
     elif "booking." in host:
-        result = extract_booking(url)
+        result = await run_in_threadpool(extract_booking, url)
     else:
         result = empty_result("other", url)
 
