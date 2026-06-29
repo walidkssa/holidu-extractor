@@ -211,7 +211,6 @@ def extract_airbnb(url: str) -> dict:
         _collect_amenities(details.get("amenities"))
         if amenities:
             out["amenities"] = amenities[:12]
-        out["_am_debug"] = _json_dumps_safe(details.get("amenities"))[:700]
 
         # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
         # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
