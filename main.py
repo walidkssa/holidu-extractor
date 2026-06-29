@@ -79,48 +79,30 @@ def empty_result(platform: str, url: str) -> dict:
     }
 
 
-def find_total(obj: Any) -> Optional[float]:
-    """Cherche un total plausible dans la structure de prix renvoyee par get_price.
-    Priorise les cles contenant 'total', puis 'amount'/'price'. Tolere les nombres
-    et les chaines formatees ('1 208,00 €')."""
+def _money(s: Any) -> Optional[int]:
+    """Parse une chaine prix Airbnb ('1 208,00 €', '€1,208', '620') en entier."""
     import re
 
-    candidates_total: List[float] = []
-    candidates_other: List[float] = []
-
-    def to_num(v: Any) -> Optional[float]:
-        if isinstance(v, bool):
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, str):
-            s = re.sub(r"[^\d.,]", "", v)
-            s = re.sub(r"[.,](\d{2})$", "", s)  # centimes
-            s = s.replace(".", "").replace(",", "")
-            if s.isdigit():
-                return float(s)
+    if s is None:
         return None
+    digits = re.sub(r"[^\d.,]", "", str(s))
+    digits = re.sub(r"[.,]\d{2}$", "", digits)   # centimes
+    digits = digits.replace(".", "").replace(",", "")
+    return int(digits) if digits.isdigit() and 10 < int(digits) < 1000000 else None
 
-    def walk(o: Any, keyhint: str = "") -> None:
-        if isinstance(o, dict):
-            for k, v in o.items():
-                walk(v, str(k).lower())
-        elif isinstance(o, list):
-            for v in o:
-                walk(v, keyhint)
-        else:
-            n = to_num(o)
-            if n is not None and 30 < n < 100000:
-                if "total" in keyhint:
-                    candidates_total.append(n)
-                elif any(h in keyhint for h in ("amount", "price")):
-                    candidates_other.append(n)
 
-    walk(obj)
-    if candidates_total:
-        return min(candidates_total)  # le total de sejour, pas un cumul/garantie
-    if candidates_other:
-        return max(candidates_other)
+def price_from_main(price_raw: Any) -> Optional[int]:
+    """Prix EXACT affiche par Airbnb (primaryLine), sans heuristique.
+    Si introuvable -> None (on prefere aucun prix a un faux prix)."""
+    if not isinstance(price_raw, dict):
+        return None
+    main = price_raw.get("main")
+    if not isinstance(main, dict):
+        return None
+    for key in ("price", "discountedPrice", "originalPrice"):
+        v = _money(main.get(key))
+        if v:
+            return v
     return None
 
 
@@ -209,18 +191,11 @@ def extract_airbnb(url: str) -> dict:
                 )
             except Exception as e:
                 out["_price_err"] = f"{type(e).__name__}: {e}"[:200]
-            total = find_total(price_raw)
+            # Prix EXACT affiche par Airbnb (primaryLine), pas une heuristique:
+            # on ne met un prix que s'il est sans ambiguite, sinon rien (jamais de faux prix).
+            total = price_from_main(price_raw)
             if total:
-                out["price"] = int(round(total))
-            try:
-                import json as _json
-                main = price_raw.get("main") if isinstance(price_raw, dict) else None
-                out["_pdebug"] = {
-                    "main": _json.loads(_json.dumps(main, default=str)) if main else None,
-                    "found_total": total,
-                }
-            except Exception:
-                pass
+                out["price"] = total
 
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
