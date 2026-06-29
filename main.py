@@ -100,18 +100,47 @@ def _money(s: Any) -> Optional[int]:
 
 
 def price_from_main(price_raw: Any) -> Optional[int]:
-    """Prix EXACT affiche par Airbnb (primaryLine), sans heuristique.
-    Si introuvable -> None (on prefere aucun prix a un faux prix)."""
+    """Prix du sejour, robuste mais fiable. Ordre de priorite:
+    1) la ligne "Total" du detail (le vrai total), 2) le prix principal affiche,
+    3) le plus grand montant plausible dans 'main' (jamais dans 'raw')."""
     if not isinstance(price_raw, dict):
         return None
     main = price_raw.get("main")
     if not isinstance(main, dict):
         return None
+
+    # 1) Ligne "Total" dans le detail
+    details = main.get("details")
+    if isinstance(details, dict):
+        for k, v in details.items():
+            if isinstance(k, str) and "total" in k.lower():
+                m = _money(v)
+                if m:
+                    return m
+
+    # 2) Prix principal affiche (primaryLine)
     for key in ("price", "discountedPrice", "originalPrice"):
         v = _money(main.get(key))
         if v:
             return v
-    return None
+
+    # 3) Repli: plus grand montant plausible dans 'main' (le total est le plus eleve)
+    nums: List[int] = []
+
+    def _walk(o: Any) -> None:
+        if isinstance(o, dict):
+            for vv in o.values():
+                _walk(vv)
+        elif isinstance(o, list):
+            for vv in o:
+                _walk(vv)
+        else:
+            m = _money(o)
+            if m and 30 < m < 100000:
+                nums.append(m)
+
+    _walk(main)
+    return max(nums) if nums else None
 
 
 def extract_airbnb(url: str) -> dict:
@@ -241,6 +270,11 @@ def extract_airbnb(url: str) -> dict:
             total = price_from_main(price_raw)
             if total:
                 out["price"] = total
+            try:
+                m = price_raw.get("main") if isinstance(price_raw, dict) else None
+                out["_pdbg"] = _json_dumps_safe(m)[:600]
+            except Exception:
+                pass
 
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
