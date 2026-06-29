@@ -32,7 +32,7 @@ app = FastAPI(title="holidu-extractor")
 
 SECRET = os.environ.get("EXTRACTOR_SECRET")
 _CACHE: Dict[str, Any] = {}
-_CACHE_TTL = 600  # 10 minutes
+_CACHE_TTL = 1800  # 30 minutes (la pre-chauffe au collage doit survivre jusqu'a la generation)
 
 
 def cached(key: str) -> Optional[dict]:
