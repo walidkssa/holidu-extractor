@@ -216,17 +216,6 @@ def extract_airbnb(url: str) -> dict:
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
             out["partial"] = not out.get("price")
-
-        # _debug: structure reelle (pour finaliser le mapping une fois)
-        try:
-            import json as _json
-            out["_debug"] = {
-                "title_raw": details.get("title"),
-                "sub_description_raw": details.get("sub_description"),
-                "price_raw": _json.loads(_json.dumps(price_raw, default=str)),
-            }
-        except Exception:
-            pass
     except Exception as exc:  # jamais de crash
         out["error"] = f"airbnb:{type(exc).__name__}:{exc}"[:200]
     return out
