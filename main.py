@@ -79,6 +79,14 @@ def empty_result(platform: str, url: str) -> dict:
     }
 
 
+def _json_dumps_safe(obj: Any) -> str:
+    import json as _json
+    try:
+        return _json.dumps(obj, default=str, ensure_ascii=False)
+    except Exception:
+        return str(obj)
+
+
 def _money(s: Any) -> Optional[int]:
     """Parse une chaine prix Airbnb ('1 208,00 €', '€1,208', '620') en entier."""
     import re
@@ -166,6 +174,17 @@ def extract_airbnb(url: str) -> dict:
                     if isinstance(u, str) and u.startswith("http"):
                         photos.append(u)
         out["photos"] = photos[:6]
+
+        # Capacite (nb de voyageurs) et chambres
+        cap = details.get("person_capacity") or details.get("capacity")
+        if cap:
+            out["capacity"] = str(cap)
+        # Chambres: best-effort dans sub_description/highlights (texte "X chambre(s)/bedroom(s)")
+        import re as _re
+        blob = _json_dumps_safe(details.get("sub_description")) + " " + _json_dumps_safe(details.get("highlights"))
+        mb = _re.search(r"(\d+)\s*(chambre|bedroom)", blob, _re.I)
+        if mb:
+            out["bedrooms"] = f"{mb.group(1)} chambres"
 
         # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
         # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
