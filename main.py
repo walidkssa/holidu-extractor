@@ -79,6 +79,51 @@ def empty_result(platform: str, url: str) -> dict:
     }
 
 
+def find_total(obj: Any) -> Optional[float]:
+    """Cherche un total plausible dans la structure de prix renvoyee par get_price.
+    Priorise les cles contenant 'total', puis 'amount'/'price'. Tolere les nombres
+    et les chaines formatees ('1 208,00 €')."""
+    import re
+
+    candidates_total: List[float] = []
+    candidates_other: List[float] = []
+
+    def to_num(v: Any) -> Optional[float]:
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            s = re.sub(r"[^\d.,]", "", v)
+            s = re.sub(r"[.,](\d{2})$", "", s)  # centimes
+            s = s.replace(".", "").replace(",", "")
+            if s.isdigit():
+                return float(s)
+        return None
+
+    def walk(o: Any, keyhint: str = "") -> None:
+        if isinstance(o, dict):
+            for k, v in o.items():
+                walk(v, str(k).lower())
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, keyhint)
+        else:
+            n = to_num(o)
+            if n is not None and 30 < n < 100000:
+                if "total" in keyhint:
+                    candidates_total.append(n)
+                elif any(h in keyhint for h in ("amount", "price")):
+                    candidates_other.append(n)
+
+    walk(obj)
+    if candidates_total:
+        return min(candidates_total)  # le total de sejour, pas un cumul/garantie
+    if candidates_other:
+        return max(candidates_other)
+    return None
+
+
 def extract_airbnb(url: str) -> dict:
     """pyairbnb (solo-maintainer): verifier la signature reelle de la version installee.
     On extrait le room_id depuis /rooms/{id}, puis on mappe defensivement."""
@@ -101,31 +146,33 @@ def extract_airbnb(url: str) -> dict:
             except Exception:
                 details = {}
 
-        def g(*keys: str) -> Any:
-            cur: Any = details
-            for k in keys:
-                if isinstance(cur, dict) and k in cur:
-                    cur = cur[k]
-                else:
-                    return None
-            return cur
-
-        name = g("name") or g("title")
+        # Nom (cle variable selon version)
+        name = details.get("name") or details.get("title") or details.get("listing_title")
         if name:
             out["name"] = str(name)
-        rating = g("rating") or g("review_score") or g("star_rating")
-        if rating:
-            out["rating"] = str(rating).replace(".", ",")
-        reviews = g("review_count") or g("reviews_count") or g("number_of_reviews")
-        if reviews:
-            out["reviewsCount"] = str(reviews)
-        location = g("location") or g("city") or g("address")
-        if location:
-            out["location"] = str(location)
 
-        # Photos: structures variables, on ramasse toutes les URLs http trouvees.
+        # Note: get_details renvoie un sous-dict {guest_satisfaction, review_count, ...}
+        rating_obj = details.get("rating")
+        if isinstance(rating_obj, dict):
+            gs = rating_obj.get("guest_satisfaction") or rating_obj.get("value")
+            if gs not in (None, 0, "0"):
+                out["rating"] = str(gs).replace(".", ",")
+            rc = rating_obj.get("review_count") or rating_obj.get("reviews_count")
+            if rc:
+                out["reviewsCount"] = str(rc)
+        elif rating_obj:
+            out["rating"] = str(rating_obj).replace(".", ",")
+
+        # Localisation
+        loc = details.get("location") or details.get("city") or details.get("address")
+        if isinstance(loc, dict):
+            loc = loc.get("city") or loc.get("title") or loc.get("address")
+        if loc:
+            out["location"] = str(loc)
+
+        # Photos: liste d'URLs ou d'objets {url}
         photos: List[str] = []
-        raw_imgs = g("images") or g("photos") or []
+        raw_imgs = details.get("images") or details.get("photos") or []
         if isinstance(raw_imgs, list):
             for it in raw_imgs:
                 if isinstance(it, str) and it.startswith("http"):
@@ -136,26 +183,43 @@ def extract_airbnb(url: str) -> dict:
                         photos.append(u)
         out["photos"] = photos[:6]
 
-        # Prix avec dates: get_price si disponible.
+        # Prix: get_price attend des objets date (pas des chaines).
+        price_raw: Any = None
         if dates["checkIn"] and dates["checkOut"]:
-            try:
-                price_data = pyairbnb.get_price(room_id, dates["checkIn"], dates["checkOut"])  # type: ignore
-                total = None
-                if isinstance(price_data, dict):
-                    total = price_data.get("total") or price_data.get("price") or price_data.get("amount")
-                    per_night = price_data.get("per_night") or price_data.get("nightly")
-                    if total is None and per_night and dates["nights"]:
-                        total = float(per_night) * dates["nights"]
-                if total is not None:
-                    out["price"] = int(round(float(total)))
-            except Exception:
-                pass
+            from datetime import date as _date
+            ci = _date.fromisoformat(dates["checkIn"])
+            co = _date.fromisoformat(dates["checkOut"])
+            for attempt in (
+                lambda: pyairbnb.get_price(room_id=room_id, check_in=ci, check_out=co, timeout=30),
+                lambda: pyairbnb.get_price(room_id, ci, co, 30),
+                lambda: pyairbnb.get_price(str(room_id), ci, co),
+            ):
+                try:
+                    price_raw = attempt()
+                    if price_raw:
+                        break
+                except Exception:
+                    continue
+            total = find_total(price_raw)
+            if total:
+                out["price"] = int(round(total))
 
-        if out.get("name") or out.get("price"):
+        if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
             out["partial"] = not out.get("price")
+
+        # _debug: structure reelle (pour finaliser le mapping une fois)
+        try:
+            import json as _json
+            out["_debug"] = {
+                "detail_keys": list(details.keys())[:50],
+                "rating_raw": rating_obj if isinstance(rating_obj, (dict, str, int, float)) else str(rating_obj),
+                "price_raw": _json.loads(_json.dumps(price_raw, default=str)),
+            }
+        except Exception:
+            pass
     except Exception as exc:  # jamais de crash
-        out["error"] = f"airbnb:{type(exc).__name__}"
+        out["error"] = f"airbnb:{type(exc).__name__}:{exc}"[:200]
     return out
 
 
