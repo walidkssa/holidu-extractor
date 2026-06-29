@@ -143,9 +143,11 @@ def price_from_main(price_raw: Any) -> Optional[int]:
     return max(nums) if nums else None
 
 
-def extract_airbnb(url: str) -> dict:
+def extract_airbnb(url: str, with_price: bool = True) -> dict:
     """pyairbnb (solo-maintainer): verifier la signature reelle de la version installee.
-    On extrait le room_id depuis /rooms/{id}, puis on mappe defensivement."""
+    On extrait le room_id depuis /rooms/{id}, puis on mappe defensivement.
+    with_price=False saute le flux prix (lent: 3 appels Airbnb) -> reponse rapide
+    pour /photos (photos + meta uniquement, garanties meme quand le prix traine)."""
     out = empty_result("airbnb", url)
     m = re.search(r"/rooms/(\d+)", url)
     if not m:
@@ -244,7 +246,7 @@ def extract_airbnb(url: str) -> dict:
         # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
         # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
         price_raw: Any = None
-        if dates["checkIn"] and dates["checkOut"]:
+        if with_price and dates["checkIn"] and dates["checkOut"]:
             from datetime import date as _date
             ci = _date.fromisoformat(dates["checkIn"])
             co = _date.fromisoformat(dates["checkOut"])
@@ -365,6 +367,38 @@ async def extract(request: Request, x_secret: Optional[str] = Header(default=Non
     host = urlparse(url).netloc.lower()
     if "airbnb." in host:
         result = extract_airbnb(url)
+    elif "booking." in host:
+        result = extract_booking(url)
+    else:
+        result = empty_result("other", url)
+
+    put_cache(cache_key, result)
+    return JSONResponse(result)
+
+
+@app.post("/photos")
+async def photos(request: Request, x_secret: Optional[str] = Header(default=None)) -> JSONResponse:
+    """Rapide: photos + meta (note, capacite, chambres, type, equipements) SANS le
+    flux prix lent. Garantit des photos meme quand l'extraction du prix traine."""
+    if SECRET and x_secret != SECRET:
+        return JSONResponse({"ok": False, "error": "forbidden", "photos": []}, status_code=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    url = (body or {}).get("url", "")
+    if not isinstance(url, str) or not url.startswith("http"):
+        return JSONResponse({"ok": False, "partial": True, "platform": "other", "photos": []})
+
+    cache_key = "photos:" + url
+    hit = cached(cache_key)
+    if hit:
+        return JSONResponse(hit)
+
+    host = urlparse(url).netloc.lower()
+    if "airbnb." in host:
+        result = extract_airbnb(url, with_price=False)
     elif "booking." in host:
         result = extract_booking(url)
     else:
