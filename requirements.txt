@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pyairbnb>=0.0.9
+playwright>=1.44
+beautifulsoup4>=4.12
+# Optionnel (furtivite Booking): patchright OU playwright-extra + stealth
+# patchright>=1.44

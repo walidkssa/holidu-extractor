@@ -1,0 +1,16 @@
+# Deploiement en un clic sur Render (https://render.com).
+# 1) Pousser ce dossier sur un repo GitHub.
+# 2) Render > New > Blueprint > sélectionner le repo.
+# 3) Définir EXTRACTOR_SECRET (une valeur secrète au choix).
+# 4) Copier l'URL publique du service dans EXTRACTOR_URL côté Vercel (portfolio),
+#    et la même valeur EXTRACTOR_SECRET dans EXTRACTOR_SECRET côté Vercel.
+
+services:
+  - type: web
+    name: holidu-extractor
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: EXTRACTOR_SECRET
+        sync: false
