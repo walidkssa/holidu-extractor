@@ -147,7 +147,9 @@ def extract_airbnb(url: str) -> dict:
                 details = {}
 
         # Nom (cle variable selon version)
-        name = details.get("name") or details.get("title") or details.get("listing_title")
+        sub = details.get("sub_description")
+        sub_title = sub.get("title") if isinstance(sub, dict) else (sub if isinstance(sub, str) else None)
+        name = details.get("name") or details.get("title") or sub_title or details.get("listing_title")
         if name:
             out["name"] = str(name)
 
@@ -183,23 +185,30 @@ def extract_airbnb(url: str) -> dict:
                         photos.append(u)
         out["photos"] = photos[:6]
 
-        # Prix: get_price attend des objets date (pas des chaines).
+        # Prix: get_price exige api_key + cookies (sinon cookies.update(None) plante).
+        # Flux: get_api_key + get_metadata_from_url (-> impression_id + cookies) -> get_price.
         price_raw: Any = None
         if dates["checkIn"] and dates["checkOut"]:
             from datetime import date as _date
             ci = _date.fromisoformat(dates["checkIn"])
             co = _date.fromisoformat(dates["checkOut"])
-            for attempt in (
-                lambda: pyairbnb.get_price(room_id=room_id, check_in=ci, check_out=co, timeout=30),
-                lambda: pyairbnb.get_price(room_id, ci, co, 30),
-                lambda: pyairbnb.get_price(str(room_id), ci, co),
-            ):
-                try:
-                    price_raw = attempt()
-                    if price_raw:
-                        break
-                except Exception:
-                    continue
+            try:
+                api_key = pyairbnb.get_api_key("")
+                _meta, price_input, cookies = pyairbnb.get_metadata_from_url(url, "en", "")
+                impression_id = price_input.get("impression_id") if isinstance(price_input, dict) else None
+                price_raw = pyairbnb.get_price(
+                    room_id=room_id,
+                    check_in=ci,
+                    check_out=co,
+                    adults=2,
+                    currency="EUR",
+                    language="fr",
+                    impresion_id=impression_id,
+                    api_key=api_key,
+                    cookies=cookies,
+                )
+            except Exception as e:
+                out["_price_err"] = f"{type(e).__name__}: {e}"[:200]
             total = find_total(price_raw)
             if total:
                 out["price"] = int(round(total))
@@ -212,8 +221,8 @@ def extract_airbnb(url: str) -> dict:
         try:
             import json as _json
             out["_debug"] = {
-                "detail_keys": list(details.keys())[:50],
-                "rating_raw": rating_obj if isinstance(rating_obj, (dict, str, int, float)) else str(rating_obj),
+                "title_raw": details.get("title"),
+                "sub_description_raw": details.get("sub_description"),
                 "price_raw": _json.loads(_json.dumps(price_raw, default=str)),
             }
         except Exception:
