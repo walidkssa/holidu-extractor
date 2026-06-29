@@ -212,6 +212,15 @@ def extract_airbnb(url: str) -> dict:
             total = find_total(price_raw)
             if total:
                 out["price"] = int(round(total))
+            try:
+                import json as _json
+                main = price_raw.get("main") if isinstance(price_raw, dict) else None
+                out["_pdebug"] = {
+                    "main": _json.loads(_json.dumps(main, default=str)) if main else None,
+                    "found_total": total,
+                }
+            except Exception:
+                pass
 
         if out.get("name") or out.get("price") or out.get("photos"):
             out["ok"] = True
